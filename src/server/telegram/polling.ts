@@ -87,6 +87,8 @@ export class TelegramPollingService {
         // ignore
       }
 
+      let consecutiveErrors = 0;
+
       // Main polling loop with active token
       while (this.isRunning) {
         try {
@@ -101,9 +103,15 @@ export class TelegramPollingService {
           const activeToken = telegramBot.getToken() || token;
           this.pollAbortController = new AbortController();
 
-          const url = `https://api.telegram.org/bot${activeToken}/getUpdates?offset=${this.offset}&timeout=20&allowed_updates=["message","callback_query"]`;
+          // Use timeout=15s on Telegram side and 25s client timeout to prevent socket drop
+          const timeoutSignal = AbortSignal.timeout ? AbortSignal.timeout(25000) : undefined;
+          const combinedSignal = (AbortSignal as any).any && timeoutSignal
+            ? (AbortSignal as any).any([this.pollAbortController.signal, timeoutSignal])
+            : this.pollAbortController.signal;
+
+          const url = `https://api.telegram.org/bot${activeToken}/getUpdates?offset=${this.offset}&timeout=15&allowed_updates=["message","callback_query"]`;
           const response = await fetch(url, {
-            signal: this.pollAbortController.signal,
+            signal: combinedSignal,
           });
 
           if (!response.ok) {
@@ -114,12 +122,17 @@ export class TelegramPollingService {
               this.isRunning = false;
               break;
             }
-            console.warn(`[Polling] getUpdates HTTP ${response.status}:`, errData);
-            await new Promise((r) => setTimeout(r, 3000));
+            consecutiveErrors++;
+            if (consecutiveErrors >= 5) {
+              console.log(`[Polling] Temporary Telegram API status ${response.status}, retrying...`);
+            }
+            await new Promise((r) => setTimeout(r, Math.min(consecutiveErrors * 1000, 5000)));
             continue;
           }
 
           const data = await response.json();
+          consecutiveErrors = 0; // Reset on successful response
+
           if (data && data.ok && Array.isArray(data.result)) {
             for (const update of data.result) {
               this.offset = Math.max(this.offset, update.update_id + 1);
@@ -131,11 +144,19 @@ export class TelegramPollingService {
             }
           }
         } catch (err: any) {
-          if (err.name === 'AbortError') {
-            break;
+          if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+            // Normal long polling timeout / abort, immediately continue next poll
+            continue;
           }
-          console.warn('[Polling] Network error during getUpdates:', err?.message || err);
-          await new Promise((r) => setTimeout(r, 2000));
+
+          consecutiveErrors++;
+          // Standard transient network hiccup in long polling (e.g. idle socket reset)
+          if (consecutiveErrors >= 5) {
+            console.log(`[Polling] Connection retry (${consecutiveErrors})...`);
+          }
+
+          const delay = Math.min(consecutiveErrors * 1000, 5000);
+          await new Promise((r) => setTimeout(r, delay));
         }
       }
     }
