@@ -1,0 +1,6 @@
+{
+  "name": "نَزِّل - منصة تنزيل وسائط تليجرام الاحترافية",
+  "description": "منصة Telegram احترافية متكاملة لتنزيل الفيديوهات والصوتيات من الروابط العامة مع لوحة تحكم إدارية ونظام طوابير واشتراك إجباري.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
